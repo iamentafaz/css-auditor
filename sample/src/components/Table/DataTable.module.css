@@ -1,0 +1,13 @@
+.table-wrapper { overflow-x: auto; border: 1px solid #E5E7EB; border-radius: 8px; }
+.table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.table__th { padding: 10px 16px; text-align: left; font-weight: 500; background: #F9FAFB; border-bottom: 1px solid #E5E7EB; cursor: pointer; }
+.table__td { padding: 10px 16px; border-bottom: 1px solid #F3F4F6; }
+.table__row--even { background: white; }
+.table__row--odd  { background: #F9FAFB; }
+.table__sort-icon--asc  { color: #3B82F6; }
+.table__sort-icon--desc { color: #3B82F6; }
+
+/* Dead variant classes — defined but never applied in any component */
+.table--striped { }
+.table--compact .table__td { padding: 6px 12px; }
+.table--bordered .table__td { border: 1px solid #E5E7EB; }

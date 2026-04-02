@@ -1,0 +1,7 @@
+{
+  "ignoreClasses": [],
+  "ignorePaths": [],
+  "checkDeadCss": true,
+  "checkUndefined": true,
+  "checkHardcodedInline": true
+}

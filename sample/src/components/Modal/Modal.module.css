@@ -1,0 +1,34 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* backdrop--blur is NOT defined here — will be caught as undefined ref */
+
+.modal {
+  background: white;
+  border-radius: 12px;
+  max-width: 560px;
+  width: 100%;
+}
+
+.modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.modal__close-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.modal__body {
+  color: #374151;
+}
