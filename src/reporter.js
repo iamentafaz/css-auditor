@@ -9,19 +9,31 @@ const ICONS = {
 };
 
 const COLORS = {
-  'undefined-class': chalk.red,
-  'hardcoded-inline': chalk.yellow,
-  'hardcoded-styled': chalk.yellow,
-  'dead-css': chalk.cyan,
-  'dead-styled-component': chalk.magenta,
+  'undefined-class':          chalk.red,
+  'hardcoded-inline':         chalk.yellow,
+  'hardcoded-styled':         chalk.yellow,
+  'dead-css':                 chalk.cyan,
+  'dead-styled-component':    chalk.magenta,
+  'important-usage':          chalk.yellow,
+  'undefined-css-var':        chalk.red,
+  'dead-css-var':             chalk.cyan,
+  'duplicate-hardcoded-value':chalk.cyan,
+  'high-z-index':             chalk.yellow,
+  'inconsistent-breakpoint':  chalk.yellow,
 };
 
 const LABELS = {
-  'undefined-class': chalk.bgRed.white(' UNDEF '),
-  'hardcoded-inline': chalk.bgYellow.black(' INLINE '),
-  'hardcoded-styled': chalk.bgYellow.black(' STYLED '),
-  'dead-css': chalk.bgCyan.black(' DEAD  '),
-  'dead-styled-component': chalk.bgMagenta.white(' DEAD-SC'),
+  'undefined-class':          chalk.bgRed.white(' UNDEF '),
+  'hardcoded-inline':         chalk.bgYellow.black(' INLINE '),
+  'hardcoded-styled':         chalk.bgYellow.black(' STYLED '),
+  'dead-css':                 chalk.bgCyan.black(' DEAD  '),
+  'dead-styled-component':    chalk.bgMagenta.white(' DEAD-SC'),
+  'important-usage':          chalk.bgYellow.black(' IMPRT '),
+  'undefined-css-var':        chalk.bgRed.white(' CSS-VAR'),
+  'dead-css-var':             chalk.bgCyan.black(' CSS-VAR'),
+  'duplicate-hardcoded-value':chalk.bgCyan.black(' DUP-VAL'),
+  'high-z-index':             chalk.bgYellow.black(' Z-IDX '),
+  'inconsistent-breakpoint':  chalk.bgYellow.black(' BRKPT '),
 };
 
 export function report(violations, stats, options = {}) {
@@ -78,13 +90,25 @@ export function report(violations, stats, options = {}) {
   const styledCount       = sumType(violations, 'hardcoded-styled');
   const deadCssCount      = sumType(violations, 'dead-css');
   const deadStyledCount   = sumType(violations, 'dead-styled-component');
+  const importantCount    = sumType(violations, 'important-usage');
+  const undefinedVarCount = sumType(violations, 'undefined-css-var');
+  const deadVarCount      = sumType(violations, 'dead-css-var');
+  const dupValueCount     = sumType(violations, 'duplicate-hardcoded-value');
+  const highZCount        = sumType(violations, 'high-z-index');
+  const brkptCount        = sumType(violations, 'inconsistent-breakpoint');
 
   const parts = [];
-  if (errorCount)      parts.push(chalk.red(`${ICONS.error} ${errorCount} undefined`));
-  if (inlineCount)     parts.push(chalk.yellow(`${ICONS.warning} ${inlineCount} hardcoded inline`));
-  if (styledCount)     parts.push(chalk.yellow(`${ICONS.warning} ${styledCount} hardcoded styled`));
-  if (deadCssCount)    parts.push(chalk.cyan(`${ICONS.info} ${deadCssCount} dead CSS`));
-  if (deadStyledCount) parts.push(chalk.magenta(`${ICONS.info} ${deadStyledCount} dead styled`));
+  if (errorCount)        parts.push(chalk.red(`${ICONS.error} ${errorCount} undefined`));
+  if (undefinedVarCount) parts.push(chalk.red(`${ICONS.error} ${undefinedVarCount} undefined CSS vars`));
+  if (inlineCount)       parts.push(chalk.yellow(`${ICONS.warning} ${inlineCount} hardcoded inline`));
+  if (styledCount)       parts.push(chalk.yellow(`${ICONS.warning} ${styledCount} hardcoded styled`));
+  if (importantCount)    parts.push(chalk.yellow(`${ICONS.warning} ${importantCount} !important`));
+  if (highZCount)        parts.push(chalk.yellow(`${ICONS.warning} ${highZCount} high z-index`));
+  if (brkptCount)        parts.push(chalk.yellow(`${ICONS.warning} ${brkptCount} breakpoint issues`));
+  if (deadCssCount)      parts.push(chalk.cyan(`${ICONS.info} ${deadCssCount} dead CSS`));
+  if (deadStyledCount)   parts.push(chalk.magenta(`${ICONS.info} ${deadStyledCount} dead styled`));
+  if (deadVarCount)      parts.push(chalk.cyan(`${ICONS.info} ${deadVarCount} dead CSS vars`));
+  if (dupValueCount)     parts.push(chalk.cyan(`${ICONS.info} ${dupValueCount} duplicate values`));
 
   console.log('\n  ' + parts.join(chalk.dim('  ·  ')));
   console.log(chalk.dim(`\n  ${violations.size} file(s) with violations\n`));

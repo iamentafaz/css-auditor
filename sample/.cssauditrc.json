@@ -3,5 +3,15 @@
   "ignorePaths": [],
   "checkDeadCss": true,
   "checkUndefined": true,
-  "checkHardcodedInline": true
+  "checkHardcodedInline": true,
+  "checkHardcodedStyled": true,
+  "checkDeadStyledComponents": true,
+  "checkImportant": true,
+  "checkDeadCssVars": true,
+  "checkDuplicateValues": true,
+  "duplicateValueThreshold": 3,
+  "checkHighZIndex": true,
+  "zIndexThreshold": 50,
+  "checkBreakpoints": true,
+  "knownBreakpoints": []
 }

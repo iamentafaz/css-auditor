@@ -2,7 +2,7 @@
 import { glob } from 'glob';
 import fs from 'fs';
 import path from 'path';
-import { collectCssClasses } from './core/css-collector.js';
+import { collectCssInfo } from './core/css-collector.js';
 import { collectJsxInfo } from './core/jsx-collector.js';
 import { collectStyledInfo } from './core/styled-collector.js';
 import { analyze, isTailwindClass } from './core/analyzer.js';
@@ -56,13 +56,15 @@ async function main() {
     }),
   ]);
 
-  // ── Collect CSS classes ──────────────────────────────────────────────────
+  // ── Collect CSS classes + extended info ─────────────────────────────────
   const allCssClasses = new Map();
+  const cssFileData = new Map(); // filePath -> full collectCssInfo result
   for (const file of cssFiles) {
-    const fileClasses = collectCssClasses(file);
-    for (const [cls, info] of fileClasses) {
+    const info = collectCssInfo(file);
+    cssFileData.set(file, info);
+    for (const [cls, clsInfo] of info.classes) {
       if (!allCssClasses.has(cls)) {
-        allCssClasses.set(cls, info);
+        allCssClasses.set(cls, clsInfo);
       }
     }
   }
@@ -92,7 +94,7 @@ async function main() {
   }
 
   // ── Analyze ──────────────────────────────────────────────────────────────
-  const violations = analyze(allCssClasses, jsxFileData, styledData, config);
+  const violations = analyze(allCssClasses, jsxFileData, styledData, config, cssFileData);
 
   // ── Report ───────────────────────────────────────────────────────────────
   const stats = {
@@ -158,9 +160,19 @@ function printHelp() {
     {
       "ignoreClasses": ["js-hook", "data-test"],
       "ignorePaths":   ["src/legacy", "src/vendor"],
-      "checkDeadCss":          true,
-      "checkUndefined":        true,
-      "checkHardcodedInline":  true
+      "checkDeadCss":               true,
+      "checkUndefined":             true,
+      "checkHardcodedInline":       true,
+      "checkHardcodedStyled":       true,
+      "checkDeadStyledComponents":  true,
+      "checkImportant":             true,
+      "checkDeadCssVars":           true,
+      "checkDuplicateValues":       true,
+      "duplicateValueThreshold":    3,
+      "checkHighZIndex":            true,
+      "zIndexThreshold":            50,
+      "checkBreakpoints":           true,
+      "knownBreakpoints":           [640, 768, 1024, 1280, 1536]
     }
 
   Exit codes:

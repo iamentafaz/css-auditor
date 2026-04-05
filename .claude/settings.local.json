@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node src/cli.js sample --verbose)",
+      "Bash(git add:*)"
+    ]
+  }
+}
