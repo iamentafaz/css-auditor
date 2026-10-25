@@ -1,6 +1,7 @@
 import postcss from 'postcss';
 import postcssScss from 'postcss-scss';
 import fs from 'fs';
+import { isTokenValue } from './token-values.js';
 
 /**
  * Parses a CSS/SCSS file and returns:
@@ -21,11 +22,14 @@ export function collectCssInfo(filePath) {
   const cssVarUsages = [];
   const zIndexDecls = [];
   const breakpoints = [];
+  const hardcodedValues = [];
+  const comments = [];
 
   try {
     const root = postcss.parse(content, {
       syntax: isScss ? postcssScss : undefined,
     });
+    root.walkComments((comment) => comments.push({ value: comment.text, line: comment.source?.start?.line ?? 0 }));
 
     // Track the "current" classes in scope for a rule so we can attach them to decls
     root.walkRules((rule) => {
@@ -46,10 +50,15 @@ export function collectCssInfo(filePath) {
 
       // Walk declarations inside this rule
       rule.walkDecls((decl) => {
+        if (decl.parent !== rule) return;
         const prop = decl.prop;
         const value = decl.value;
         const line = decl.source?.start?.line ?? 0;
         const clsLabel = ruleClasses[0] ?? '(unknown)';
+
+        if (!decl.important && isTokenValue(prop, value)) {
+          hardcodedValues.push({ prop, value, line, cls: clsLabel, file: filePath });
+        }
 
         // !important detection
         if (decl.important) {
@@ -107,10 +116,11 @@ export function collectCssInfo(filePath) {
       }
     });
   } catch (e) {
-    // Silently skip unparseable files
+    return { classes, importantDecls, cssVarDefs, cssVarUsages, zIndexDecls, breakpoints, hardcodedValues,
+      parseError: { message: e.message, line: e.line, column: e.column }, comments: [] };
   }
 
-  return { classes, importantDecls, cssVarDefs, cssVarUsages, zIndexDecls, breakpoints };
+  return { classes, importantDecls, cssVarDefs, cssVarUsages, zIndexDecls, breakpoints, hardcodedValues, comments };
 }
 
 /**

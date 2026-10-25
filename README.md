@@ -20,6 +20,9 @@ node src/cli.js C:/Users/mir/Documents/work/my-react-app --verbose
 
 # JSON output (pipe into a file or CI tool)
 node src/cli.js C:/Users/mir/Documents/work/my-react-app --json > audit.json
+
+# SARIF output for GitHub Code Scanning and compatible CI tools
+node src/cli.js C:/Users/mir/Documents/work/my-react-app --format sarif > audit.sarif
 ```
 
 ---
@@ -88,6 +91,50 @@ Drop a `.cssauditrc.json` at the **root of the app you're scanning** to tune whi
   "checkDeadCssVars": true
 }
 ```
+
+Rules can use `error`, `warning`, `info`, or `off` severities. `failOn` controls the minimum severity that causes a nonzero exit code:
+
+```json
+{
+  "rules": {
+    "undefined-class": "error",
+    "dead-css": "warning",
+    "hardcoded-inline": "off"
+  },
+  "failOn": "warning"
+}
+```
+
+Tailwind recognition defaults to the built-in heuristic. Use strict mode with explicit prefixes or classes when the heuristic reports false positives:
+
+```json
+{
+  "tailwind": {
+    "mode": "strict",
+    "prefixes": ["tw-"],
+    "classes": ["flex", "hidden"]
+  }
+}
+```
+
+CSS Module references such as `styles.button` and `styles['button--active']` are checked against the stylesheet imported by that component. Parsing failures are reported as `parse-error` diagnostics rather than silently skipped.
+
+Suppress individual findings with comments. `disable-next-line`, `disable-line`, and `ignore` accept rule IDs or `*`; a `disable` block stays active until its matching `enable` comment:
+
+```jsx
+{/* css-auditor-disable-next-line undefined-class */}
+<div className="third-party-hook" />
+```
+
+```css
+/* css-auditor-disable dead-css */
+.generated-class { color: #fff; }
+/* css-auditor-enable dead-css */
+```
+
+Duplicate-value analysis now combines CSS declarations, inline style objects, and styled-component templates. Common equivalent color spellings such as `white` and `#fff` are grouped together. JSON output includes a schema version and violation counts by rule and severity; SARIF results include stable fingerprints for CI annotations.
+
+Run the automated regression suite with `npm test` (Node.js built-in test runner).
 
 The auditor looks for this file in the scanned directory first, then falls back to your current working directory.
 

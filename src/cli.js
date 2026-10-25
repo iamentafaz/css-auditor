@@ -6,17 +6,18 @@ import { collectCssInfo } from './core/css-collector.js';
 import { collectJsxInfo } from './core/jsx-collector.js';
 import { collectStyledInfo } from './core/styled-collector.js';
 import { analyze, isTailwindClass } from './core/analyzer.js';
-import { report, reportJson } from './reporter.js';
+import { report, reportJson, reportSarif } from './reporter.js';
 
 // ── Parse CLI args ────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
 const flags = {
   verbose: args.includes('--verbose') || args.includes('-v'),
   json:    args.includes('--json'),
+  format:  valueAfter(args, '--format'),
   help:    args.includes('--help') || args.includes('-h'),
 };
 
-const positional = args.filter((a) => !a.startsWith('-'));
+const positional = args.filter((a, index) => !a.startsWith('-') && args[index - 1] !== '--format');
 const targetDir  = positional[0] || '.';
 
 if (flags.help) {
@@ -36,7 +37,12 @@ async function main() {
     process.exit(1);
   }
 
-  if (!flags.json) {
+  const outputFormat = flags.format || (flags.json ? 'json' : 'text');
+  if (!['text', 'json', 'sarif'].includes(outputFormat)) {
+    console.error(`Unknown output format "${outputFormat}". Use text, json, or sarif.`);
+    process.exit(2);
+  }
+  if (outputFormat === 'text') {
     console.log('');
     console.log(`  css-auditor  scanning ${path.relative(process.cwd(), resolvedDir) || '.'}`);
     console.log('');
@@ -63,6 +69,7 @@ async function main() {
     const info = collectCssInfo(file);
     cssFileData.set(file, info);
     for (const [cls, clsInfo] of info.classes) {
+      if (/\.module\.(css|scss|sass)$/i.test(file)) continue;
       if (!allCssClasses.has(cls)) {
         allCssClasses.set(cls, clsInfo);
       }
@@ -84,8 +91,9 @@ async function main() {
 
     // Count class usage for stats
     for (const usage of info.classUsages || []) {
+      customClassCount += usage.cssModuleRefs?.length ?? 0;
       for (const cls of usage.classes) {
-        if (isTailwindClass(cls)) tailwindClassCount++;
+        if (isTailwindClass(cls, config.tailwind || {})) tailwindClassCount++;
         else customClassCount++;
       }
     }
@@ -100,20 +108,24 @@ async function main() {
   const stats = {
     jsxFiles: jsxFiles.length,
     cssFiles: cssFiles.length,
-    cssClasses: allCssClasses.size,
+    cssClasses: [...cssFileData.values()].reduce((total, info) => total + info.classes.size, 0),
     tailwindClasses: tailwindClassCount,
     customClasses: customClassCount,
     styledComponents: styledComponentCount,
   };
 
-  if (flags.json) {
+  if (outputFormat === 'json') {
     reportJson(violations, stats);
+  } else if (outputFormat === 'sarif') {
+    reportSarif(violations, stats, { cwd: resolvedDir });
   } else {
     report(violations, stats, { verbose: flags.verbose, cwd: process.cwd() });
   }
 
   // Exit code 1 if there are errors (for CI)
-  const hasErrors = [...violations.values()].flat().some((v) => v.severity === 'error');
+  const severityRank = { error: 0, warning: 1, info: 2 };
+  const failThreshold = severityRank[config.failOn || 'error'] ?? 0;
+  const hasErrors = [...violations.values()].flat().some((v) => severityRank[v.severity] <= failThreshold);
   process.exit(hasErrors ? 1 : 0);
 }
 
@@ -151,6 +163,7 @@ function printHelp() {
   Options:
     --verbose, -v    Show fix suggestions for each violation
     --json           Output results as JSON (for CI/tooling integration)
+    --format <type>  Output as text, json, or sarif
     --help, -h       Show this help message
 
   Config:
@@ -179,6 +192,11 @@ function printHelp() {
     0   No errors (warnings/info may exist)
     1   One or more undefined-class errors found (useful for CI)
 `);
+}
+
+function valueAfter(args, flag) {
+  const index = args.indexOf(flag);
+  return index >= 0 ? args[index + 1] : undefined;
 }
 
 main().catch((err) => {

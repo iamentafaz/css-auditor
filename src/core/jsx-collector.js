@@ -2,6 +2,7 @@ import * as parser from '@babel/parser';
 import _traverse from '@babel/traverse';
 const traverse = _traverse.default ?? _traverse;
 import fs from 'fs';
+import path from 'path';
 
 /**
  * Parses a JSX/TSX file and extracts:
@@ -12,6 +13,7 @@ export function collectJsxInfo(filePath) {
   const content = fs.readFileSync(filePath, 'utf8');
   const classUsages = [];
   const inlineStyles = [];
+  const cssModuleImports = new Map();
 
   let ast;
   try {
@@ -27,7 +29,16 @@ export function collectJsxInfo(filePath) {
       ],
     });
   } catch (e) {
-    return { classUsages, inlineStyles, parseError: e.message };
+    return { classUsages, inlineStyles, cssModuleImports, comments: [], parseError: { message: e.message, line: e.loc?.line, column: e.loc ? e.loc.column + 1 : undefined } };
+  }
+
+  for (const statement of ast.program.body) {
+    if (statement.type !== 'ImportDeclaration' || !/\.module\.(css|scss|sass)(?:$|\?)/i.test(statement.source.value)) continue;
+    for (const specifier of statement.specifiers) {
+      if (specifier.type === 'ImportDefaultSpecifier' || specifier.type === 'ImportNamespaceSpecifier') {
+        cssModuleImports.set(specifier.local.name, path.resolve(path.dirname(filePath), statement.source.value.split('?')[0]));
+      }
+    }
   }
 
   traverse(ast, {
@@ -48,7 +59,7 @@ export function collectJsxInfo(filePath) {
 
         } else if (val.type === 'JSXExpressionContainer') {
           const expr = val.expression;
-          const { staticClasses, cssModuleRefs, isDynamic } = extractClassesFromExpr(expr);
+          const { staticClasses, cssModuleRefs, isDynamic } = extractClassesFromExpr(expr, cssModuleImports);
           classUsages.push({ classes: staticClasses, cssModuleRefs, line, isDynamic });
         }
       }
@@ -71,7 +82,8 @@ export function collectJsxInfo(filePath) {
     },
   });
 
-  return { classUsages, inlineStyles };
+  return { classUsages, inlineStyles, cssModuleImports,
+    comments: (ast.comments || []).map((comment) => ({ value: comment.value, line: comment.loc?.start?.line ?? 0 })) };
 }
 
 /**
@@ -79,8 +91,9 @@ export function collectJsxInfo(filePath) {
  * Handles: template literals, ternaries, logical &&, cn()/clsx()/classnames() calls,
  * array expressions, and string concatenation.
  */
-function extractClassesFromExpr(expr) {
+function extractClassesFromExpr(expr, cssModuleImports = new Map()) {
   const staticClasses = [];
+  const cssModuleRefs = [];
   let isDynamic = false;
 
   function walk(node) {
@@ -144,7 +157,15 @@ function extractClassesFromExpr(expr) {
         break;
 
       case 'MemberExpression':
-        if (!node.computed) {
+        if (node.object?.type === 'Identifier' && cssModuleImports.has(node.object.name)) {
+          const className = !node.computed && node.property.type === 'Identifier'
+            ? node.property.name
+            : node.computed && node.property.type === 'StringLiteral'
+              ? node.property.value
+              : null;
+          if (className) cssModuleRefs.push({ file: cssModuleImports.get(node.object.name), className });
+          else isDynamic = true;
+        } else if (!node.computed) {
           // styles.btn  →  property name is an Identifier
           if (node.property.type === 'Identifier') {
             staticClasses.push(node.property.name);
@@ -166,8 +187,9 @@ function extractClassesFromExpr(expr) {
   }
 
   walk(expr);
-  return { staticClasses, isDynamic };
+  return { staticClasses, cssModuleRefs, isDynamic };
 }
+
 
 /**
  * Analyzes a style object expression and classifies each property as

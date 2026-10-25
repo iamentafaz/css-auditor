@@ -1,4 +1,5 @@
 import path from 'path';
+import { isTokenValue, normalizeTokenValue } from './token-values.js';
 
 // Known Tailwind prefixes and utility patterns — these are never "undefined" custom classes
 const TAILWIND_PREFIXES = [
@@ -62,7 +63,9 @@ const TAILWIND_VARIANTS = [
 /**
  * Returns true if a class name looks like a Tailwind utility class.
  */
-export function isTailwindClass(cls) {
+export function isTailwindClass(cls, tailwindConfig = {}) {
+  if (tailwindConfig.enabled === false) return false;
+  if ((tailwindConfig.classes || []).includes(cls)) return true;
   // Strip variant prefixes: hover:, sm:, dark:focus:, etc.
   let base = cls;
   let parts = cls.split(':');
@@ -70,9 +73,15 @@ export function isTailwindClass(cls) {
     // All but last part should be variants
     const variants = parts.slice(0, -1);
     const allVariants = variants.every((v) =>
-      TAILWIND_VARIANTS.some((prefix) => v === prefix || v.startsWith(prefix + '-'))
+      [...TAILWIND_VARIANTS, ...(tailwindConfig.variants || [])].some((prefix) => v === prefix || v.startsWith(prefix + '-'))
     );
     if (allVariants) base = parts[parts.length - 1];
+  }
+
+  const configuredPrefixes = tailwindConfig.prefixes || [];
+  if (tailwindConfig.mode === 'strict') {
+    const candidate = base.startsWith('-') ? base.slice(1) : base;
+    return configuredPrefixes.some((prefix) => candidate === prefix || candidate.startsWith(prefix.endsWith('-') ? prefix : prefix + '-'));
   }
 
   // Handle negation: -mt-4
@@ -95,8 +104,9 @@ export function isTailwindClass(cls) {
   if (exactMatches.includes(stripped)) return true;
 
   // Prefix match: w-4, p-2, bg-red-500, text-sm, etc.
-  return TAILWIND_PREFIXES.some((prefix) => {
-    return stripped === prefix || stripped.startsWith(prefix + '-');
+  const prefixes = [...TAILWIND_PREFIXES, ...configuredPrefixes];
+  return prefixes.some((prefix) => {
+    return stripped === prefix || stripped.startsWith(prefix.endsWith('-') ? prefix : prefix + '-');
   });
 }
 
@@ -127,29 +137,45 @@ export function analyze(allCssClasses, jsxFileData, styledData = new Map(), conf
     checkBreakpoints = true,
     knownBreakpoints = [],
   } = config;
+  const tailwindConfig = config.tailwind || {};
 
   const violations = new Map(); // filePath -> violation[]
   const usedCssClasses = new Set();
   const renderedComponents = new Set(); // PascalCase JSX element names seen across all files
 
   // ── Pass 1: scan JSX files ──────────────────────────────────────────────
-  for (const [filePath, { classUsages, inlineStyles }] of jsxFileData) {
+  for (const [filePath, jsxInfo] of jsxFileData) {
     if (shouldIgnore(filePath, ignorePaths)) continue;
+    const { classUsages = [], inlineStyles = [] } = jsxInfo;
 
     const fileViolations = [];
 
+    if (jsxInfo.parseError) fileViolations.push(parseErrorViolation(jsxInfo.parseError));
+
     // Check className usage
     for (const usage of classUsages) {
+      const moduleRefs = usage.cssModuleRefs || [];
+      for (const ref of moduleRefs) {
+        if (ignoreClasses.includes(ref.className)) continue;
+        const moduleClasses = cssFileData.get(ref.file)?.classes;
+        if (!moduleClasses?.has(ref.className)) {
+          fileViolations.push({ type: 'undefined-class', severity: 'error', line: usage.line,
+            message: `CSS Module class "${ref.className}" is not defined in ${path.basename(ref.file)}`,
+            detail: usage.isDynamic ? '(reference extracted from dynamic expression)' : null, cls: ref.className });
+        } else {
+          usedCssClasses.add(`${ref.file}::${ref.className}`);
+        }
+      }
       for (const cls of usage.classes) {
         if (ignoreClasses.includes(cls)) continue;
 
         // Track for dead CSS check
-        if (!isTailwindClass(cls)) {
+        if (!isTailwindClass(cls, tailwindConfig)) {
           usedCssClasses.add(cls);
         }
 
         // Check if custom (non-Tailwind) class is defined anywhere
-        if (checkUndefined && !isTailwindClass(cls) && !allCssClasses.has(cls)) {
+        if (checkUndefined && !isTailwindClass(cls, tailwindConfig) && !allCssClasses.has(cls)) {
           fileViolations.push({
             type: 'undefined-class',
             severity: 'error',
@@ -211,18 +237,22 @@ export function analyze(allCssClasses, jsxFileData, styledData = new Map(), conf
   if (checkDeadCss) {
     const deadByFile = new Map();
 
-    for (const [cls, { file, line }] of allCssClasses) {
+    const definitions = cssFileData.size
+      ? [...cssFileData].flatMap(([file, info]) => [...info.classes].map(([cls, data]) => [cls, { ...data, file }]))
+      : [...allCssClasses];
+    for (const [cls, { file, line }] of definitions) {
       if (ignoreClasses.includes(cls)) continue;
-      if (usedCssClasses.has(cls)) continue;
+      const isCssModule = /\.module\.(css|scss|sass)$/i.test(file);
+      const isUsed = isCssModule
+        ? usedCssClasses.has(`${file}::${cls}`)
+        : usedCssClasses.has(cls);
+      if (isUsed) continue;
 
       if (!deadByFile.has(file)) deadByFile.set(file, []);
       deadByFile.get(file).push({
-        type: 'dead-css',
-        severity: 'info',
-        line,
+        type: 'dead-css', severity: 'info', line,
         message: `Dead CSS: class ".${cls}" is defined but never used in any component`,
-        detail: 'Consider removing it to reduce stylesheet size.',
-        cls,
+        detail: 'Consider removing it to reduce stylesheet size.', cls,
       });
     }
 
@@ -260,6 +290,10 @@ export function analyze(allCssClasses, jsxFileData, styledData = new Map(), conf
 
     const fileViolations = violations.get(filePath) || [];
     let added = false;
+    if (cssInfo.parseError) {
+      fileViolations.push(parseErrorViolation(cssInfo.parseError));
+      added = true;
+    }
 
     // !important usage
     if (checkImportant) {
@@ -441,12 +475,28 @@ export function analyze(allCssClasses, jsxFileData, styledData = new Map(), conf
   // ── Pass G: duplicate hardcoded values across styled-components ─────────────
   if (checkDuplicateValues) {
     // Collect all hardcoded values from styled-components across all files
-    const valueMap = new Map(); // value -> array of { file, line, componentName, prop }
+    const valueMap = new Map(); // normalized value -> array of locations
+    const addValue = (value, occurrence) => {
+      const normalized = normalizeTokenValue(value);
+      if (!valueMap.has(normalized)) valueMap.set(normalized, []);
+      valueMap.get(normalized).push({ ...occurrence, componentName: occurrence.componentName || occurrence.source });
+    };
     for (const [filePath, { hardcodedStyled = [] }] of styledData) {
       if (shouldIgnore(filePath, ignorePaths)) continue;
       for (const h of hardcodedStyled) {
-        if (!valueMap.has(h.value)) valueMap.set(h.value, []);
-        valueMap.get(h.value).push({ file: filePath, line: h.line, componentName: h.componentName, prop: h.prop });
+        addValue(h.value, { file: filePath, line: h.line, componentName: h.componentName, prop: h.prop });
+      }
+    }
+    for (const [filePath, cssInfo] of cssFileData) {
+      if (shouldIgnore(filePath, ignorePaths)) continue;
+      for (const item of cssInfo.hardcodedValues || []) addValue(item.value, { file: filePath, line: item.line, source: `.${item.cls}` });
+    }
+    for (const [filePath, jsxInfo] of jsxFileData) {
+      if (shouldIgnore(filePath, ignorePaths)) continue;
+      for (const style of jsxInfo.inlineStyles || []) {
+        for (const item of style.hardcodedProps || []) {
+          if (isTokenValue(item.key, item.value)) addValue(item.value, { file: filePath, line: item.line, source: `inline ${item.key}` });
+        }
       }
     }
 
@@ -467,7 +517,7 @@ export function analyze(allCssClasses, jsxFileData, styledData = new Map(), conf
           severity: 'info',
           line: firstOcc.line,
           message: `Value \`${value}\` is hardcoded in ${occurrences.length} places — consider a CSS variable or design token`,
-          detail: `Appears in: ${[...new Set(occurrences.map((o) => o.componentName))].join(', ')}`,
+          detail: `Appears in: ${[...new Set(occurrences.map((o) => o.componentName || o.source))].join(', ')}`,
         });
       }
     }
@@ -478,7 +528,77 @@ export function analyze(allCssClasses, jsxFileData, styledData = new Map(), conf
     }
   }
 
+  // Styled and CSS collectors parse the same source independently; report one parser diagnostic per file.
+  for (const [filePath, info] of styledData) {
+    if (!info.parseError || shouldIgnore(filePath, ignorePaths)) continue;
+    const existing = violations.get(filePath) || [];
+    if (!existing.some((violation) => violation.type === 'parse-error')) {
+      existing.push(parseErrorViolation(info.parseError));
+      violations.set(filePath, existing);
+    }
+  }
+
+  for (const [filePath, fileViolations] of violations) {
+    const comments = jsxFileData.get(filePath)?.comments || cssFileData.get(filePath)?.comments || styledData.get(filePath)?.comments || [];
+    const ranges = buildSuppressionRanges(comments);
+    if (ranges.length) {
+      const remaining = fileViolations.filter((violation) => !ranges.some((range) =>
+        (range.rule === '*' || range.rule === violation.type) && violation.line >= range.start && violation.line <= range.end));
+      if (remaining.length) violations.set(filePath, remaining);
+      else violations.delete(filePath);
+    }
+  }
+
+  for (const [, fileViolations] of violations) {
+    for (const violation of fileViolations) {
+      const severity = config.rules?.[violation.type];
+      if (severity === 'off') violation.suppressed = true;
+      else if (['error', 'warning', 'info'].includes(severity)) violation.severity = severity;
+    }
+  }
+  for (const [filePath, fileViolations] of violations) {
+    const active = fileViolations.filter((violation) => !violation.suppressed);
+    if (active.length) violations.set(filePath, active);
+    else violations.delete(filePath);
+  }
   return violations;
+}
+
+function parseErrorViolation(error) {
+  return {
+    type: 'parse-error', severity: 'error', line: error.line || 0, column: error.column,
+    message: `Could not parse source: ${error.message}`,
+  };
+}
+
+function buildSuppressionRanges(comments) {
+  const ranges = [];
+  const open = new Map();
+  const directivePattern = /(?:^|\n)\s*\*?\s*css-auditor-(disable-next-line|disable-line|disable|enable|ignore)\b([^\n]*)/gi;
+  for (const comment of comments) {
+    directivePattern.lastIndex = 0;
+    let match;
+    while ((match = directivePattern.exec(comment.value)) !== null) {
+      const directiveLine = (comment.line || 1) + comment.value.slice(0, match.index).split('\n').length - 1;
+      const rules = match[2].trim().split(/[\s,]+/).filter(Boolean);
+      const targets = rules.length ? rules : ['*'];
+      if (match[1] === 'disable-next-line' || match[1] === 'ignore') {
+        for (const rule of targets) ranges.push({ rule, start: directiveLine + (match[1] === 'ignore' ? 0 : 1), end: directiveLine + (match[1] === 'ignore' ? 0 : 1) });
+      } else if (match[1] === 'disable-line') {
+        for (const rule of targets) ranges.push({ rule, start: directiveLine, end: directiveLine });
+      } else if (match[1] === 'disable') {
+        for (const rule of targets) open.set(rule, directiveLine + 1);
+      } else if (match[1] === 'enable') {
+        for (const rule of targets) {
+          const start = open.get(rule);
+          if (start !== undefined) ranges.push({ rule, start, end: directiveLine - 1 });
+          open.delete(rule);
+        }
+      }
+    }
+  }
+  for (const [rule, start] of open) ranges.push({ rule, start, end: Infinity });
+  return ranges;
 }
 
 function shouldIgnore(filePath, ignorePaths) {

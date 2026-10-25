@@ -2,6 +2,7 @@ import * as parser from '@babel/parser';
 import _traverse from '@babel/traverse';
 const traverse = _traverse.default ?? _traverse;
 import fs from 'fs';
+import { isTokenValue } from './token-values.js';
 
 /**
  * Parses a JS/TS/JSX/TSX file and extracts styled-components data:
@@ -33,7 +34,8 @@ export function collectStyledInfo(filePath) {
       ],
     });
   } catch (e) {
-    return { styledDefinitions, hardcodedStyled, renderedElements, zIndexDecls, cssVarUsages, parseError: e.message };
+    return { styledDefinitions, hardcodedStyled, renderedElements, zIndexDecls, cssVarUsages,
+      parseError: { message: e.message, line: e.loc?.line, column: e.loc ? e.loc.column + 1 : undefined }, comments: [] };
   }
 
   traverse(ast, {
@@ -72,7 +74,8 @@ export function collectStyledInfo(filePath) {
     },
   });
 
-  return { styledDefinitions, hardcodedStyled, renderedElements, zIndexDecls, cssVarUsages };
+  return { styledDefinitions, hardcodedStyled, renderedElements, zIndexDecls, cssVarUsages,
+    comments: (ast.comments || []).map((comment) => ({ value: comment.value, line: comment.loc?.start?.line ?? 0 })) };
 }
 
 /**
@@ -190,14 +193,7 @@ function extractFromTemplate(quasi) {
       }
 
       // Hardcoded token-worthy value check
-      if (!TOKEN_PROPS.has(prop)) continue;
-      if (!HARDCODED_VALUE_RE.test(value)) continue;
-
-      // Skip CSS variable usage: var(--token) or ${theme.x}
-      if (value.includes('var(') || value.includes('${')) continue;
-
-      // Skip structurally fine literals that never need a design token
-      if (SAFE_VALUE_RE.test(value)) continue;
+      if (!isTokenValue(prop, value)) continue;
 
       hardcoded.push({ prop, value, line });
     }

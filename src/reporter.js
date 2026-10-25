@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import path from 'path';
+import { createHash } from 'crypto';
 
 const ICONS = {
   error: '✖',
@@ -20,6 +21,7 @@ const COLORS = {
   'duplicate-hardcoded-value':chalk.cyan,
   'high-z-index':             chalk.yellow,
   'inconsistent-breakpoint':  chalk.yellow,
+  'parse-error':              chalk.red,
 };
 
 const LABELS = {
@@ -34,6 +36,7 @@ const LABELS = {
   'duplicate-hardcoded-value':chalk.bgCyan.black(' DUP-VAL'),
   'high-z-index':             chalk.bgYellow.black(' Z-IDX '),
   'inconsistent-breakpoint':  chalk.bgYellow.black(' BRKPT '),
+  'parse-error':              chalk.bgRed.white(' PARSE '),
 };
 
 export function report(violations, stats, options = {}) {
@@ -69,7 +72,7 @@ export function report(violations, stats, options = {}) {
     for (const v of sorted) {
       const color = COLORS[v.type] || chalk.white;
       const icon = v.severity === 'error' ? ICONS.error : v.severity === 'warning' ? ICONS.warning : ICONS.info;
-      const lineTag = v.line ? chalk.dim(`L${v.line}`) : chalk.dim('  —  ');
+      const lineTag = v.line ? chalk.dim(`L${v.line}${v.column ? `:${v.column}` : ''}`) : chalk.dim('  —  ');
 
       console.log(`    ${color(icon)}  ${lineTag.padEnd(6)}  ${color(v.message)}`);
 
@@ -120,21 +123,76 @@ export function report(violations, stats, options = {}) {
 
 export function reportJson(violations, stats) {
   const output = {
-    summary: stats,
+    schemaVersion: '1.0',
+    summary: { ...stats, ...summarizeViolations(violations) },
     files: {},
   };
 
   for (const [filePath, fileViolations] of violations) {
-    output.files[filePath] = fileViolations.map((v) => ({
+      output.files[filePath] = fileViolations.map((v) => ({
       type: v.type,
+      ruleId: v.type,
       severity: v.severity,
       line: v.line,
+      column: v.column,
       message: v.message,
       detail: v.detail,
     }));
   }
 
   console.log(JSON.stringify(output, null, 2));
+}
+
+export function reportSarif(violations, stats, options = {}) {
+  const { cwd = process.cwd() } = options;
+  const items = [...violations].flatMap(([file, fileViolations]) => fileViolations.map((violation) => ({ file, violation })));
+  const ruleIds = [...new Set(items.map(({ violation }) => violation.type))];
+  const sarif = {
+    version: '2.1.0',
+    $schema: 'https://json.schemastore.org/sarif-2.1.0.json',
+    runs: [{
+      tool: {
+        driver: {
+          name: 'css-auditor',
+          informationUri: 'https://github.com/iamentafaz/css-auditor',
+          rules: ruleIds.map((id) => ({
+            id,
+            shortDescription: { text: id.replaceAll('-', ' ') },
+            help: { text: `css-auditor rule: ${id}` },
+          })),
+        },
+      },
+      properties: { summary: { ...stats, ...summarizeViolations(violations) } },
+      results: items.map(({ file, violation }) => ({
+        ruleId: violation.type,
+        level: violation.severity === 'error' ? 'error' : violation.severity === 'warning' ? 'warning' : 'note',
+        message: { text: violation.message },
+        ...(violation.detail ? { properties: { detail: violation.detail } } : {}),
+        partialFingerprints: {
+          'css-auditor/v1': createHash('sha256')
+            .update(`${violation.type}\0${path.relative(cwd, file)}\0${violation.line || 0}\0${violation.message}`)
+            .digest('hex'),
+        },
+        locations: [{ physicalLocation: {
+          artifactLocation: { uri: path.relative(cwd, file).replaceAll(path.sep, '/') },
+          region: { startLine: violation.line || 1, ...(violation.column ? { startColumn: violation.column } : {}) },
+        } }],
+      })),
+    }],
+  };
+  console.log(JSON.stringify(sarif, null, 2));
+}
+
+function summarizeViolations(violations) {
+  const summary = { totalViolations: 0, bySeverity: { error: 0, warning: 0, info: 0 }, byRule: {} };
+  for (const fileViolations of violations.values()) {
+    for (const violation of fileViolations) {
+      summary.totalViolations++;
+      summary.bySeverity[violation.severity] = (summary.bySeverity[violation.severity] || 0) + 1;
+      summary.byRule[violation.type] = (summary.byRule[violation.type] || 0) + 1;
+    }
+  }
+  return summary;
 }
 
 function printStats(stats) {
